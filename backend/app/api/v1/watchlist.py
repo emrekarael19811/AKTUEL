@@ -30,10 +30,10 @@ class WatchlistResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-def get_current_user_id() -> str:
-    # Supabase JWT token doğrulaması burada yapılır.
-    # Production'da: from app.auth import verify_jwt_token
-    return "placeholder-user-id"
+from app.auth import get_current_user
+
+async def get_current_user_id(user: dict = Depends(get_current_user)) -> str:
+    return user["id"]
 
 
 @router.get("/", response_model=list[WatchlistResponse])
