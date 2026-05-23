@@ -1,0 +1,127 @@
+version: '3.9'
+
+services:
+  # --- Backend API ---
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: aktuel-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    depends_on:
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - pdf_storage:/app/data/pdfs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # --- Celery Worker ---
+  celery-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: aktuel-celery-worker
+    restart: unless-stopped
+    command: celery -A celeryconfig.celery_app worker --loglevel=info --concurrency=4
+    env_file:
+      - ../.env
+    depends_on:
+      - redis
+      - api
+    volumes:
+      - pdf_storage:/app/data/pdfs
+
+  # --- Celery Beat (Zamanlayıcı) ---
+  celery-beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: aktuel-celery-beat
+    restart: unless-stopped
+    command: celery -A celeryconfig.celery_app beat --loglevel=info --scheduler=django_celery_beat.schedulers:DatabaseScheduler
+    env_file:
+      - ../.env
+    depends_on:
+      - redis
+      - celery-worker
+
+  # --- Redis ---
+  redis:
+    image: redis:7-alpine
+    container_name: aktuel-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Elasticsearch ---
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.16.0
+    container_name: aktuel-elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - ELASTIC_PASSWORD=aktuel_es_pass
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # --- Next.js Web ---
+  web:
+    build:
+      context: ../frontend/web
+      dockerfile: Dockerfile
+    container_name: aktuel-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+    depends_on:
+      - api
+
+  # --- Nginx Reverse Proxy ---
+  nginx:
+    image: nginx:alpine
+    container_name: aktuel-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_certs:/etc/nginx/certs
+    depends_on:
+      - api
+      - web
+
+volumes:
+  redis_data:
+  es_data:
+  pdf_storage:
+  nginx_certs:
