@@ -1,0 +1,128 @@
+name: Market Scraping Pipeline
+
+on:
+  # Manuel tetikleme - hangi marketi istersen seç
+  workflow_dispatch:
+    inputs:
+      market:
+        description: 'Market slug (bim, a101, migros, sok, carrefoursa, all)'
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, bim, a101, migros, sok, carrefoursa]
+
+  # Otomatik zamanlama (Türkiye saati = UTC+3)
+  schedule:
+    - cron: '0 5 * * 5'   # Cuma 08:00 TSİ → BIM + Migros
+    - cron: '0 5 * * 4'   # Perşembe 08:00 TSİ → A101 + SOK + CarrefourSA
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python kurulum
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Tesseract OCR kur (Türkçe dil paketi)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-tur poppler-utils
+
+      - name: Bağımlılıkları kur
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Market belirle
+        id: market
+        run: |
+          INPUT="${{ github.event.inputs.market || 'all' }}"
+          DAY=$(date +%u)   # 1=Pzt, 4=Per, 5=Cum
+
+          if [ "$INPUT" = "all" ]; then
+            if [ "$DAY" = "5" ]; then
+              echo "markets=bim migros" >> $GITHUB_OUTPUT
+            elif [ "$DAY" = "4" ]; then
+              echo "markets=a101 sok carrefoursa" >> $GITHUB_OUTPUT
+            else
+              echo "markets=bim a101 migros sok carrefoursa" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "markets=$INPUT" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Scraping çalıştır
+        working-directory: backend
+        env:
+          DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_ANON_KEY:    ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENAI_API_KEY:       ${{ secrets.OPENAI_API_KEY }}
+          REDIS_URL:            ""
+          ELASTICSEARCH_URL:    ${{ secrets.ELASTICSEARCH_URL || 'http://localhost:9200' }}
+        run: |
+          MARKETS="${{ steps.market.outputs.markets }}"
+          echo "Scraping: $MARKETS"
+
+          for MARKET in $MARKETS; do
+            echo "::group::$MARKET scraping"
+            python -c "
+          import asyncio, os, sys
+          sys.path.insert(0, '.')
+
+          async def main():
+              from app.scrapers import SCRAPER_REGISTRY
+              from app.tasks.scraping import _async_scrape_market
+              market = '$MARKET'
+              print(f'--- {market.upper()} ---')
+              result = await _async_scrape_market(market)
+              print(f'Sonuc: {result}')
+
+          asyncio.run(main())
+          " || echo "::warning::$MARKET scraping hatası"
+            echo "::endgroup::"
+          done
+
+      - name: Özet rapor
+        if: always()
+        working-directory: backend
+        env:
+          DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_ANON_KEY:    ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          python -c "
+          import asyncio, os, sys
+          sys.path.insert(0, '.')
+
+          async def report():
+              import asyncpg
+              url = os.environ['DATABASE_URL']
+              if 'pooler.supabase.com' not in url:
+                  url = url.replace('postgresql://', '')
+              conn = await asyncpg.connect(url + '?sslmode=require' if '?' not in url else url)
+              total_raw = await conn.fetchval('SELECT COUNT(*) FROM raw_products')
+              total_prices = await conn.fetchval('SELECT COUNT(*) FROM product_prices')
+              active_cats = await conn.fetchval(\"\"\"
+                  SELECT COUNT(*) FROM catalogs
+                  WHERE status = 'active'
+                  AND valid_until >= CURRENT_DATE
+              \"\"\")
+              print(f'Veritabanı özeti:')
+              print(f'  Aktif katalog: {active_cats}')
+              print(f'  Toplam ham ürün: {total_raw}')
+              print(f'  Toplam fiyat kaydı: {total_prices}')
+              await conn.close()
+
+          asyncio.run(report())
+          " || echo "Rapor alınamadı"
