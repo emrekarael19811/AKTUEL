@@ -49,9 +49,11 @@ class Settings(BaseSettings):
         "https://aktuel.app",
     ]
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": True,
+        "extra": "ignore",
+    }
 
 
 settings = Settings()

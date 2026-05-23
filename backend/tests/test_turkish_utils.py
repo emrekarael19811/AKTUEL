@@ -18,7 +18,9 @@ class TestTrCase:
         assert tr_lower("İSTANBUL") == "istanbul"
 
     def test_tr_upper_all_chars(self):
-        assert tr_upper("çğışöü") == "ÇĞİŞÖÜ"
+        # ı (noktasız i) → I, i (noktalı i) → İ
+        assert tr_upper("çğışöü") == "ÇĞIŞÖÜ"
+        assert tr_upper("istanbul") == "İSTANBUL"
 
 
 class TestParsePriceTl:

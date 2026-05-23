@@ -12,8 +12,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Türkçe karakter dönüşüm tabloları
-_TR_UPPER_MAP = str.maketrans("çğıöşü", "ÇĞİÖŞÜ")
-_TR_LOWER_MAP = str.maketrans("ÇĞİÖŞÜ", "çğıöşü")
+# i → İ (noktalı büyük i), ı → I (noktasız büyük i)
+_TR_UPPER_MAP = str.maketrans("iıçğöşü", "İIÇĞÖŞÜ")
+_TR_LOWER_MAP = str.maketrans("İIÇĞÖŞÜ", "iıçğöşü")
 
 # Birim eşleştirme sözlüğü
 _UNIT_NORMALIZE = {
@@ -29,11 +30,13 @@ _UNIT_NORMALIZE = {
 
 def tr_upper(text: str) -> str:
     """Türkçe farkında büyük harf: 'istanbul' -> 'İSTANBUL'."""
+    # Önce i→İ ve ı→I dönüşümü yap, sonra ASCII upper (Türkçe harfler zaten dönüştürüldü)
     return text.translate(_TR_UPPER_MAP).upper()
 
 
 def tr_lower(text: str) -> str:
     """Türkçe farkında küçük harf: 'İSTANBUL' -> 'istanbul'."""
+    # Önce İ→i ve I→ı dönüşümü yap, sonra ASCII lower
     return text.translate(_TR_LOWER_MAP).lower()
 
 
